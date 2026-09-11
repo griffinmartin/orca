@@ -5,8 +5,12 @@ import {
   detectAgentStatusFromTitle,
   detectAgentTitleIdleEvidence
 } from '../../shared/agent-detection'
+import { resolveExplicitTerminalTitleAgentType } from '../../shared/terminal-title-agent-type'
 import { terminalTitleBlocksExplicitAgentStatus } from './runtime-worktree-status-projection'
-import { hasPositiveStoredIdleEvidence } from './stored-agent-idle-evidence'
+import {
+  hasPositiveStoredIdleEvidence,
+  nameOnlyIdleNeedsCorroboration
+} from './stored-agent-idle-evidence'
 
 export class OrcaRuntimeWithApplyTrackedPtyTitle extends OrcaRuntimeWithGetUnpersistedTrackedTitleForPty {
   /** Apply one observed OSC title (raw form) to the PTY and leaf records.
@@ -29,13 +33,22 @@ export class OrcaRuntimeWithApplyTrackedPtyTitle extends OrcaRuntimeWithGetUnper
     const identityOnlyTitle = this.isLiveCursorNativeTitle(rawTitle, meta)
     const recordedTitle = identityOnlyTitle ? null : normalizedTitle
     const agentStatus = identityOnlyTitle ? null : detectAgentStatusFromTitle(rawTitle)
-    // Why: a title carrying only the agent's NAME reads as idle for display, but a busy
-    // Codex/Devin pane emits that same title — it must not settle a tui-idle wait (#6011).
-    const agentIdleEvidence = identityOnlyTitle ? null : detectAgentTitleIdleEvidence(rawTitle)
-    const explicitIdle = agentStatus === 'idle' && agentIdleEvidence === 'explicit'
-    this.recordAgentPromptLifecycleState(ptyId, agentStatus)
     let ptyRecordChanged = false
     const pty = this.ptysById.get(ptyId)
+    // Why: a title carrying only the agent's NAME reads as idle for display, but a busy
+    // Codex/Devin pane emits that same title — it must not settle a tui-idle wait (#6011).
+    // Why graded here and not in the detector: only agents that later announce rest with
+    // their own explicit title can afford to have the name-only one demoted.
+    // Why the title fallback: an adopted pane has no launch metadata, but its
+    // name-only title is exactly the thing that names the agent.
+    const paneAgent =
+      pty?.launchAgent ?? pty?.foregroundAgent ?? resolveExplicitTerminalTitleAgentType(rawTitle)
+    const agentIdleEvidence =
+      identityOnlyTitle || !nameOnlyIdleNeedsCorroboration(paneAgent)
+        ? null
+        : detectAgentTitleIdleEvidence(rawTitle)
+    const explicitIdle = agentStatus === 'idle' && agentIdleEvidence !== 'name-only'
+    this.recordAgentPromptLifecycleState(ptyId, agentStatus)
     if (pty) {
       const prevStatus = pty.lastAgentStatus
       const prevExplicitIdle = hasPositiveStoredIdleEvidence(pty)

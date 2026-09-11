@@ -7,6 +7,8 @@ import {
   normalizeTerminalTitle
 } from '../../shared/agent-detection'
 import { shouldModelAnswerHiddenPtyQueries } from './terminal-model-query-authority'
+import { nameOnlyIdleNeedsCorroboration } from './stored-agent-idle-evidence'
+import { resolveExplicitTerminalTitleAgentType } from '../../shared/terminal-title-agent-type'
 
 export class OrcaRuntimeWithMaybeHydrateHeadlessFromRenderer extends OrcaRuntimeWithSerializeMainTerminalBuffer {
   // Why: hydrate the runtime headless emulator from the desktop renderer's
@@ -138,7 +140,11 @@ export class OrcaRuntimeWithMaybeHydrateHeadlessFromRenderer extends OrcaRuntime
         leaf.lastAgentStatus = status
         // Why: a seeded name-only title is the weakest idle there is — it is historical
         // AND nameless, so it must not settle a tui-idle wait registered after it (#6011).
-        leaf.lastAgentIdleEvidence = detectAgentTitleIdleEvidence(title)
+        leaf.lastAgentIdleEvidence = nameOnlyIdleNeedsCorroboration(
+          pty?.launchAgent ?? pty?.foregroundAgent ?? resolveExplicitTerminalTitleAgentType(title)
+        )
+          ? detectAgentTitleIdleEvidence(title)
+          : null
       }
     }
   }

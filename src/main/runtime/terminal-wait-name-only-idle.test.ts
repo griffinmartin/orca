@@ -255,7 +255,7 @@ function makeStore() {
   }
 }
 
-async function makeRuntime() {
+async function makeRuntime(launchAgent?: 'codex' | 'grok') {
   const runtime = new OrcaRuntimeService(makeStore() as never)
   runtime.setPtyController({
     spawn: vi.fn(async () => ({ id: 'never' })),
@@ -289,6 +289,14 @@ async function makeRuntime() {
       }
     ]
   })
+  if (launchAgent) {
+    runtime.registerPty(E2E_PTY_ID, E2E_WORKTREE_ID, null, {
+      tabId: 'tab-1',
+      leafId: E2E_LEAF_ID,
+      incarnationId: 'name-only-incarnation',
+      agentLaunchAuthority: { launchToken: 'name-only-launch', launchAgent }
+    })
+  }
   const { terminals } = await runtime.listTerminals(`id:${E2E_WORKTREE_ID}`)
   return { runtime, handle: terminals[0].handle }
 }
@@ -322,6 +330,31 @@ describe('tui-idle over the live OSC title pipeline', () => {
 
   it('refuses a name-only title observed before the waiter registered', async () => {
     const { runtime, handle } = await makeRuntime()
+    runtime.onPtyData(E2E_PTY_ID, `${oscTitle(NAME_ONLY_TITLE)}output\n`, Date.now())
+
+    await expect(
+      runtime.waitForTerminal(handle, { condition: 'tui-idle', timeoutMs: 250 })
+    ).rejects.toThrow('timeout')
+  })
+})
+
+// Why this gate exists: demoting every name-only title left agents that emit their NAME
+// and nothing else at rest with no settle signal at all. A real idle Grok pane repaints
+// its banner about four times a second forever, so output never quiesces and the wait ran
+// to timeout — a total loss of tui-idle for that provider. Only agents that go on to
+// announce rest with an explicit title of their own can afford the demotion.
+describe('name-only demotion is scoped to agents with an explicit idle title', () => {
+  it('settles for an agent that never emits anything but its name', async () => {
+    const { runtime, handle } = await makeRuntime('grok')
+    runtime.onPtyData(E2E_PTY_ID, `${oscTitle('grok')}banner\n`, Date.now())
+
+    await expect(
+      runtime.waitForTerminal(handle, { condition: 'tui-idle', timeoutMs: 2_000 })
+    ).resolves.toMatchObject({ condition: 'tui-idle', satisfied: true })
+  })
+
+  it('still refuses the name-only title of an agent that announces rest explicitly', async () => {
+    const { runtime, handle } = await makeRuntime('codex')
     runtime.onPtyData(E2E_PTY_ID, `${oscTitle(NAME_ONLY_TITLE)}output\n`, Date.now())
 
     await expect(
