@@ -15,6 +15,7 @@ import {
   getTerminalState
 } from './terminal-wait-results'
 import { buildTerminalWaitText } from './terminal-wait-tail-state'
+import { hasPositiveStoredIdleEvidence } from './stored-agent-idle-evidence'
 import type { TerminalWaiter } from './runtime-terminal-contracts'
 import type { RuntimeLeafRecord, RuntimePtyWorktreeRecord } from './runtime-terminal-state-records'
 import type { AgentStatus } from '../../shared/agent-detection'
@@ -60,7 +61,11 @@ export class RuntimeTerminalWait {
       if (condition === 'tui-idle' && ptyBlockedReason) {
         return buildPtyTerminalWaitBlockedResult(handle, condition, pty.pty, ptyBlockedReason)
       }
-      if (condition === 'tui-idle' && pty.pty.lastAgentStatus === 'idle') {
+      // Why the evidence gate: a stored idle that came from a name-only agent title is
+      // emitted just as often mid-turn, so accepting it here satisfied tui-idle in ~0s
+      // against a working agent (#6011). Such a pane falls through to the poll, which
+      // corroborates with output quiescence plus a live non-shell foreground process.
+      if (condition === 'tui-idle' && hasPositiveStoredIdleEvidence(pty.pty)) {
         return buildPtyTerminalWaitResult(handle, condition, pty.pty)
       }
       if (
@@ -115,7 +120,7 @@ export class RuntimeTerminalWait {
               waiter,
               buildPtyTerminalWaitBlockedResult(handle, condition, live.pty, blockedReason)
             )
-          } else if (live.pty.lastAgentStatus === 'idle') {
+          } else if (hasPositiveStoredIdleEvidence(live.pty)) {
             this.waiters.resolve(waiter, buildPtyTerminalWaitResult(handle, condition, live.pty))
           } else if (
             this.deps.getAdoptedPtyIdleStatus(live.pty) === 'idle' ||
@@ -147,7 +152,8 @@ export class RuntimeTerminalWait {
     // detection that powers the renderer's "Task complete" notifications.
     // Why: only 'idle' satisfies tui-idle, not 'permission'. Permission means the
     // agent is blocked on user approval, not finished with its task.
-    if (condition === 'tui-idle' && leaf.lastAgentStatus === 'idle') {
+    // Why not a bare `=== 'idle'`: see the pty branch — name-only idle needs corroboration.
+    if (condition === 'tui-idle' && hasPositiveStoredIdleEvidence(leaf)) {
       return buildTerminalWaitResult(handle, condition, leaf)
     }
     if (condition === 'tui-idle') {
@@ -214,7 +220,7 @@ export class RuntimeTerminalWait {
               waiter,
               buildTerminalWaitBlockedResult(handle, condition, live.leaf, blockedReason)
             )
-          } else if (live.leaf.lastAgentStatus === 'idle') {
+          } else if (hasPositiveStoredIdleEvidence(live.leaf)) {
             // Why: don't clear lastAgentStatus here. It's a factual record of the
             // last detected OSC state, not a one-shot signal. Clearing it causes
             // subsequent tui-idle waiters to hang even though the agent is idle —

@@ -1,8 +1,12 @@
 // @ts-nocheck -- mechanically split from OrcaRuntimeService; behavior is covered by AST equivalence and characterization tests.
 import { OrcaRuntimeWithGetUnpersistedTrackedTitleForPty } from './orca-runtime-get-unpersisted-tracked-title-for-pty'
 import type { TerminalTitleFactMeta } from '../../shared/terminal-output-side-effects'
-import { detectAgentStatusFromTitle } from '../../shared/agent-detection'
+import {
+  detectAgentStatusFromTitle,
+  detectAgentTitleIdleEvidence
+} from '../../shared/agent-detection'
 import { terminalTitleBlocksExplicitAgentStatus } from './runtime-worktree-status-projection'
+import { hasPositiveStoredIdleEvidence } from './stored-agent-idle-evidence'
 
 export class OrcaRuntimeWithApplyTrackedPtyTitle extends OrcaRuntimeWithGetUnpersistedTrackedTitleForPty {
   /** Apply one observed OSC title (raw form) to the PTY and leaf records.
@@ -25,11 +29,16 @@ export class OrcaRuntimeWithApplyTrackedPtyTitle extends OrcaRuntimeWithGetUnper
     const identityOnlyTitle = this.isLiveCursorNativeTitle(rawTitle, meta)
     const recordedTitle = identityOnlyTitle ? null : normalizedTitle
     const agentStatus = identityOnlyTitle ? null : detectAgentStatusFromTitle(rawTitle)
+    // Why: a title carrying only the agent's NAME reads as idle for display, but a busy
+    // Codex/Devin pane emits that same title — it must not settle a tui-idle wait (#6011).
+    const agentIdleEvidence = identityOnlyTitle ? null : detectAgentTitleIdleEvidence(rawTitle)
+    const explicitIdle = agentStatus === 'idle' && agentIdleEvidence === 'explicit'
     this.recordAgentPromptLifecycleState(ptyId, agentStatus)
     let ptyRecordChanged = false
     const pty = this.ptysById.get(ptyId)
     if (pty) {
       const prevStatus = pty.lastAgentStatus
+      const prevExplicitIdle = hasPositiveStoredIdleEvidence(pty)
       const prevTitle = pty.lastOscTitle
       const observedAt = this.nextTitleObservationSequence()
       const observedAtEpochMs = identityOnlyTitle ? null : Date.now()
@@ -37,6 +46,11 @@ export class OrcaRuntimeWithApplyTrackedPtyTitle extends OrcaRuntimeWithGetUnper
       pty.lastOscTitleAt = identityOnlyTitle ? null : observedAt
       pty.lastOscTitleEpochMs = observedAtEpochMs
       pty.lastAgentStatus = agentStatus
+      // Why keep the stamp across a neutral title: the status it describes is what the
+      // foreground-probe exit recovery reinstates, so its provenance must survive with it.
+      if (agentStatus !== null) {
+        pty.lastAgentIdleEvidence = agentIdleEvidence
+      }
       pty.lastAgentStatusObservedLive = true
       if (prevStatus === 'working' && agentStatus === null) {
         this.confirmPtyAgentExit(ptyId, true)
@@ -58,7 +72,9 @@ export class OrcaRuntimeWithApplyTrackedPtyTitle extends OrcaRuntimeWithGetUnper
         this.setPtyManagementTitleFromObservedTitle(pty, normalizedTitle, observedAt)
       }
       ptyRecordChanged = prevTitle !== recordedTitle || prevStatus !== agentStatus
-      if (agentStatus === 'idle' && prevStatus !== 'idle') {
+      // Why the evidence-qualified edge: a name-only idle parks the waiter on the
+      // corroborating poll, and the later explicit idle is still a fresh transition.
+      if (explicitIdle && !prevExplicitIdle) {
         this.resolvePtyTuiIdleWaiters(pty, ptyId)
       }
       const shouldDelayMobileSnapshot =
@@ -94,6 +110,7 @@ export class OrcaRuntimeWithApplyTrackedPtyTitle extends OrcaRuntimeWithGetUnper
       // way to clear a stale 'working' status after the agent exited and
       // the shell took over the title — the stuck-spinner bug in #1437.
       const prevStatus = leaf.lastAgentStatus
+      const prevExplicitIdle = hasPositiveStoredIdleEvidence(leaf)
       const prevObservedLive = leaf.lastAgentStatusObservedLive
       leaf.lastOscTitle = recordedTitle
       leaf.lastOscTitleAt = identityOnlyTitle ? null : this.nextTitleObservationSequence()
@@ -105,6 +122,9 @@ export class OrcaRuntimeWithApplyTrackedPtyTitle extends OrcaRuntimeWithGetUnper
       // exits would observe the cleared value, and they correctly fall
       // back to title-based detection / polling.
       leaf.lastAgentStatus = agentStatus
+      if (agentStatus !== null) {
+        leaf.lastAgentIdleEvidence = agentIdleEvidence
+      }
       leaf.lastAgentStatusObservedLive = true
       // Why: resolve tui-idle on any transition TO idle (not just working→idle).
       // Claude Code may skip "working" entirely on fast tasks, going null→idle,
@@ -112,7 +132,9 @@ export class OrcaRuntimeWithApplyTrackedPtyTitle extends OrcaRuntimeWithGetUnper
       // working→idle transition that never comes. Permission→idle is excluded:
       // it means the agent was blocked on user approval and the user said no,
       // which isn't a task-completion signal.
-      if (agentStatus === 'idle' && prevStatus !== 'idle') {
+      // Why explicit only: see the pty branch — a name-only idle is not a completion
+      // signal, so it leaves the waiter on its corroborating poll instead of resolving.
+      if (explicitIdle && !prevExplicitIdle) {
         this.resolveTuiIdleWaiters(leaf)
       }
       // Why the second condition: push delivery is gated on LIVE idle, so its
@@ -155,6 +177,7 @@ export class OrcaRuntimeWithApplyTrackedPtyTitle extends OrcaRuntimeWithGetUnper
       pty.lastOscTitleAt = null
       pty.lastOscTitleEpochMs = null
       pty.lastAgentStatus = null
+      pty.lastAgentIdleEvidence = null
       // Why: the prior process's live frames say nothing about the replacement,
       // so the seed a same-id restore applies must not inherit its authority.
       pty.lastAgentStatusObservedLive = false
@@ -169,6 +192,7 @@ export class OrcaRuntimeWithApplyTrackedPtyTitle extends OrcaRuntimeWithGetUnper
       leaf.lastOscTitle = null
       leaf.lastOscTitleAt = null
       leaf.lastAgentStatus = null
+      leaf.lastAgentIdleEvidence = null
       leaf.lastAgentStatusObservedLive = false
       leaf.waitBlockedAt = null
       leaf.tailWaitState = undefined

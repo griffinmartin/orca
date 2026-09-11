@@ -126,8 +126,15 @@ export class OrcaRuntimeWithSerializeAgentPromptSubmission extends OrcaRuntimeWi
           .get(ptyId)
           ?.tracker.restoreLastAgentExit(confirmedStatus)
         if (restoredStatus !== null && restoredStatus !== undefined) {
+          // Why: a done hook is provider evidence; otherwise the restored status keeps the
+          // provenance of the title that produced it, so a name-only idle stays weak (#6011).
+          const restoredIdleEvidence =
+            confirmedStatus === 'idle' ? 'explicit' : (current.lastAgentIdleEvidence ?? null)
+          const restoredExplicitIdle =
+            restoredStatus === 'idle' && restoredIdleEvidence !== 'name-only'
           current.lastAgentStatus = restoredStatus
-          if (restoredStatus === 'idle') {
+          current.lastAgentIdleEvidence = restoredIdleEvidence
+          if (restoredExplicitIdle) {
             this.resolvePtyTuiIdleWaiters(current, ptyId)
           }
           for (const leaf of this.getLeavesForPty(ptyId)) {
@@ -136,8 +143,11 @@ export class OrcaRuntimeWithSerializeAgentPromptSubmission extends OrcaRuntimeWi
             }
             // Why: the foreground agent disproved the neutral title's exit signal; keep runtime delivery state aligned with the restored tracker.
             leaf.lastAgentStatus = restoredStatus
-            if (restoredStatus === 'idle') {
+            leaf.lastAgentIdleEvidence = restoredIdleEvidence
+            if (restoredExplicitIdle) {
               this.resolveTuiIdleWaiters(leaf)
+            }
+            if (restoredStatus === 'idle') {
               this.deliverPendingMessagesForLeaf(leaf)
             }
           }

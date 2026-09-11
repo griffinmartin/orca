@@ -1,4 +1,4 @@
-import type { AgentStatus } from '../../shared/agent-detection'
+import type { AgentStatus, AgentTitleIdleEvidence } from '../../shared/agent-detection'
 import type { SleepingAgentLaunchConfig } from '../../shared/agent-session-resume'
 import type { PtyIncarnationId } from '../../shared/pty-incarnation'
 import type { RuntimeSyncedLeaf } from '../../shared/runtime-types'
@@ -37,6 +37,9 @@ export type RuntimeLeafRecord = RuntimeSyncedLeaf &
     lastExitCode: number | null
     lastExitCause: TerminalExitCause | null
     lastAgentStatus: AgentStatus | null
+    /** Provenance of an `idle` in `lastAgentStatus`, stamped at write time.
+     *  Absent means "never stamped" and reads as explicit (#6011). */
+    lastAgentIdleEvidence?: AgentTitleIdleEvidence | null
     lastAgentStatusObservedLive: boolean
     lastOscTitle: string | null
     lastOscTitleAt: number | null
@@ -64,6 +67,9 @@ export type RuntimePtyWorktreeRecord = RuntimeTerminalTailState & {
   lastExitCode: number | null
   lastExitCause: TerminalExitCause | null
   lastAgentStatus: AgentStatus | null
+  /** Provenance of an `idle` in `lastAgentStatus`, stamped at write time.
+   *  Absent means "never stamped" and reads as explicit (#6011). */
+  lastAgentIdleEvidence?: AgentTitleIdleEvidence | null
   lastAgentStatusObservedLive: boolean
   lastAgentStatusStartedAtEpochMs: number | null
   lastAgentStatusRichInvalidatedAtEpochMs: number | null

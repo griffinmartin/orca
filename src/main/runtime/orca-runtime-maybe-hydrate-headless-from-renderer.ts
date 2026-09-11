@@ -1,7 +1,11 @@
 // @ts-nocheck -- mechanically split from OrcaRuntimeService; behavior is covered by AST equivalence and characterization tests.
 import { OrcaRuntimeWithSerializeMainTerminalBuffer } from './orca-runtime-serialize-main-terminal-buffer'
 import { MOBILE_SUBSCRIBE_SCROLLBACK_ROWS } from './scrollback-limits'
-import { detectAgentStatusFromTitle, normalizeTerminalTitle } from '../../shared/agent-detection'
+import {
+  detectAgentStatusFromTitle,
+  detectAgentTitleIdleEvidence,
+  normalizeTerminalTitle
+} from '../../shared/agent-detection'
 import { shouldModelAnswerHiddenPtyQueries } from './terminal-model-query-authority'
 
 export class OrcaRuntimeWithMaybeHydrateHeadlessFromRenderer extends OrcaRuntimeWithSerializeMainTerminalBuffer {
@@ -132,6 +136,9 @@ export class OrcaRuntimeWithMaybeHydrateHeadlessFromRenderer extends OrcaRuntime
       leaf.lastOscTitleAt = this.nextTitleObservationSequence()
       if (status !== null) {
         leaf.lastAgentStatus = status
+        // Why: a seeded name-only title is the weakest idle there is — it is historical
+        // AND nameless, so it must not settle a tui-idle wait registered after it (#6011).
+        leaf.lastAgentIdleEvidence = detectAgentTitleIdleEvidence(title)
       }
     }
   }

@@ -179,96 +179,142 @@ function canonicalizeBrailleSpinnerFrame(title: string): string {
   return canonical
 }
 
-function computeAgentStatusFromTitle(title: string): AgentStatus | null {
+/**
+ * Whether an idle verdict rests on a positive idle marker the agent emitted, or
+ * only on the agent's NAME appearing in the title. A name-only title is emitted
+ * just as often mid-turn as between turns, so it is not evidence of settlement
+ * on its own (#6011).
+ */
+export type AgentTitleIdleEvidence = 'explicit' | 'name-only'
+
+type AgentTitleClassification = {
+  status: AgentStatus | null
+  /** Only set when `status` is `idle`. */
+  idleEvidence: AgentTitleIdleEvidence | null
+}
+
+const NO_AGENT: AgentTitleClassification = { status: null, idleEvidence: null }
+const WORKING: AgentTitleClassification = { status: 'working', idleEvidence: null }
+const PERMISSION: AgentTitleClassification = { status: 'permission', idleEvidence: null }
+const EXPLICIT_IDLE: AgentTitleClassification = { status: 'idle', idleEvidence: 'explicit' }
+const NAME_ONLY_IDLE: AgentTitleClassification = { status: 'idle', idleEvidence: 'name-only' }
+
+/** For sub-detectors that own an explicit state protocol and return a bare status. */
+function fromExplicitStatus(status: AgentStatus): AgentTitleClassification {
+  if (status === 'idle') {
+    return EXPLICIT_IDLE
+  }
+  return status === 'working' ? WORKING : PERMISSION
+}
+
+function computeAgentTitleClassification(title: string): AgentTitleClassification {
   if (!title || isClaudeManagementTitle(title)) {
-    return null
+    return NO_AGENT
   }
   if (title.trim().toLowerCase() === CURSOR_NATIVE_TITLE_LOWER) {
-    return null
+    return NO_AGENT
   }
 
   if (isOpenCodeNativeTitle(title)) {
-    return containsAgentSpinnerGlyph(title) ? 'working' : 'idle'
+    return containsAgentSpinnerGlyph(title) ? WORKING : EXPLICIT_IDLE
   }
 
   // Why: Pi/OMP's marker is an explicit state protocol, so it wins over the glyph and
   // keyword gates below — its label is free-form cwd/session text that can carry either.
   const piStateStatus = getPiStateTitleStatus(title)
   if (piStateStatus) {
-    return piStateStatus
+    return fromExplicitStatus(piStateStatus)
   }
 
   if (title.includes(GEMINI_PERMISSION)) {
-    return 'permission'
+    return PERMISSION
   }
   if (title.includes(GEMINI_WORKING) || title.includes(GEMINI_SILENT_WORKING)) {
-    return 'working'
+    return WORKING
   }
   if (title.includes(GEMINI_IDLE)) {
-    return 'idle'
+    return EXPLICIT_IDLE
   }
 
   // Why: resolve synthetic Pi/OMP permission/idle labels before the broader
   // Pi and braille-spinner checks below.
   const piCompatibleSyntheticAgentStatus = getPiCompatibleSyntheticAgentStatus(title)
   if (piCompatibleSyntheticAgentStatus) {
-    return piCompatibleSyntheticAgentStatus
+    return fromExplicitStatus(piCompatibleSyntheticAgentStatus)
   }
 
   if (title.startsWith(`${CLAUDE_IDLE} `) || title === CLAUDE_IDLE) {
-    return 'idle'
+    return EXPLICIT_IDLE
   }
   // Why: read the state separator before the blanket idle below — `π ! <label>` is a
   // blocked agent, and treating it as idle hides an OMP pane waiting on the user.
   const piCompatibleSeparatorStatus = getPiCompatibleTitleSeparatorStatus(title)
   if (piCompatibleSeparatorStatus) {
-    return piCompatibleSeparatorStatus
+    return fromExplicitStatus(piCompatibleSeparatorStatus)
   }
   if (isPiTerminalTitle(title)) {
-    return 'idle'
+    return EXPLICIT_IDLE
   }
   if (containsAgentSpinnerGlyph(title)) {
-    return 'working'
+    return WORKING
   }
   const hasDroidAgentName = DROID_AGENT_NAME_RE.test(title)
   const hasHermesAgentName = HERMES_AGENT_NAME_RE.test(title)
   const hasAgyAgentName = AGY_AGENT_NAME_RE.test(title)
   const hasLegacyAgentName = containsLegacyAgentName(title)
   if (!hasLegacyAgentName && !hasDroidAgentName && !hasHermesAgentName && !hasAgyAgentName) {
-    return null
+    return NO_AGENT
   }
   if (containsAny(title, ['action required', 'permission', 'waiting'])) {
-    return 'permission'
+    return PERMISSION
   }
   // Why: boundary-aware regexes avoid cwd/path and substring false positives.
   if (STRONG_IDLE_KEYWORDS_RE.test(title)) {
-    return 'idle'
+    return EXPLICIT_IDLE
   }
   if (STRONG_WORKING_KEYWORDS_RE.test(title)) {
-    return 'working'
+    return WORKING
   }
   if (title.startsWith('. ')) {
-    return 'working'
+    return WORKING
   }
   if (title.startsWith('* ')) {
-    return 'idle'
+    return EXPLICIT_IDLE
   }
 
   // Why: Droid hook events are authoritative; native name-only titles should
   // not turn a still-sleeping execute tool into completion.
   if (hasDroidAgentName && !hasLegacyAgentName) {
-    return null
+    return NO_AGENT
   }
 
-  return 'idle'
+  // Why still `idle`: the sidebar, `worktree ps` and mobile all need a name-only
+  // title to clear a stale spinner (#1437). The verdict keeps its display meaning
+  // and carries its weak provenance alongside, so settlement decisions can refuse
+  // it without every reader losing the row.
+  return NAME_ONLY_IDLE
+}
+
+/** Pure in `title` — memoized for the same reason the status projection below is. */
+const classifyAgentTitle: (title: string) => AgentTitleClassification = memoizeTitleClassification(
+  computeAgentTitleClassification
+)
+
+/**
+ * The idle provenance behind `detectAgentStatusFromTitle`, or null when the title
+ * is not idle. `tui-idle` satisfaction needs `explicit`; `name-only` needs
+ * corroboration (see `stored-agent-idle-evidence.ts`).
+ */
+export function detectAgentTitleIdleEvidence(title: string): AgentTitleIdleEvidence | null {
+  return classifyAgentTitle(title).idleEvidence
 }
 
 /**
  * Pure in `title`, so it is memoized on the title string: sidebar/tab selectors
  * re-ask for the same unchanged titles on every store write.
  */
-export const detectAgentStatusFromTitle: (title: string) => AgentStatus | null =
-  memoizeTitleClassification(computeAgentStatusFromTitle)
+export const detectAgentStatusFromTitle: (title: string) => AgentStatus | null = (title: string) =>
+  classifyAgentTitle(title).status
 
 /**
  * True when a quarter-circle spinner frame is the only agent evidence a title carries.

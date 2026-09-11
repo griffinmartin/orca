@@ -173,3 +173,90 @@ describe('RuntimeTerminalIdlePolls timer budget', () => {
     expect(polls.activeTimerCount).toBe(0)
   })
 })
+
+describe('RuntimeTerminalIdlePolls name-only idle corroboration', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  // Quiescence longer than the sweep interval, so one sweep can observe output that is
+  // still too fresh to corroborate anything.
+  const CORROBORATION_QUIESCENCE_MS = 5000
+
+  function createPolls(options: { foreground: string | null; resolved: string[] }) {
+    return new RuntimeTerminalIdlePolls({
+      intervalMs: INTERVAL_MS,
+      quiescenceMs: CORROBORATION_QUIESCENCE_MS,
+      getTabTitle: () => null,
+      getForegroundProcess: () => Promise.resolve(options.foreground),
+      getAdoptedPtyIdleStatus: () => null,
+      resolve: (waiter) => options.resolved.push(waiter.handle)
+    })
+  }
+
+  // #6011: the poll used to accept any stored 'idle', so a name-only title resolved
+  // on the first sweep no matter how recently the agent had written output.
+  it('holds a name-only idle pty while its output is still streaming', async () => {
+    const resolved: string[] = []
+    const polls = createPolls({ foreground: 'codex', resolved })
+    const pty = makePty('pty-name-only', {
+      lastAgentStatus: 'idle',
+      lastAgentIdleEvidence: 'name-only',
+      lastOutputAt: Date.now()
+    })
+
+    polls.startPty(makeWaiter('name-only'), pty)
+    await vi.advanceTimersByTimeAsync(INTERVAL_MS)
+
+    expect(resolved).toEqual([])
+  })
+
+  it('settles a name-only idle pty once quiescence corroborates it', async () => {
+    const resolved: string[] = []
+    const polls = createPolls({ foreground: 'codex', resolved })
+    const pty = makePty('pty-name-only', {
+      lastAgentStatus: 'idle',
+      lastAgentIdleEvidence: 'name-only',
+      lastOutputAt: Date.now() - 10_000
+    })
+
+    polls.startPty(makeWaiter('name-only'), pty)
+    await vi.advanceTimersByTimeAsync(INTERVAL_MS)
+
+    expect(resolved).toEqual(['name-only'])
+  })
+
+  it('holds a name-only idle leaf whose foreground is back to the shell', async () => {
+    const resolved: string[] = []
+    const polls = createPolls({ foreground: 'bash', resolved })
+    const leaf = makeLeaf('tab-name-only', {
+      lastAgentStatus: 'idle',
+      lastAgentIdleEvidence: 'name-only',
+      lastOutputAt: Date.now() - 10_000
+    })
+
+    polls.startLeaf(makeWaiter('name-only-leaf'), leaf)
+    await vi.advanceTimersByTimeAsync(INTERVAL_MS)
+
+    expect(resolved).toEqual([])
+  })
+
+  it('settles an explicitly reported idle on the first sweep', async () => {
+    const resolved: string[] = []
+    const polls = createPolls({ foreground: null, resolved })
+    const pty = makePty('pty-explicit', {
+      lastAgentStatus: 'idle',
+      lastAgentIdleEvidence: 'explicit',
+      lastOutputAt: Date.now()
+    })
+
+    polls.startPty(makeWaiter('explicit'), pty)
+    await vi.advanceTimersByTimeAsync(INTERVAL_MS)
+
+    expect(resolved).toEqual(['explicit'])
+  })
+})

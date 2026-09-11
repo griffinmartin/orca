@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
   detectAgentStatusFromTitle,
+  detectAgentTitleIdleEvidence,
   extractAllOscTitles,
   extractLastOscTitle,
   getAgentLabel,
@@ -312,5 +313,49 @@ describe('Cursor agent title identity', () => {
     undefined
   ])('rejects the non-Cursor title %j', (title) => {
     expect(isCursorAgentTitle(title)).toBe(false)
+  })
+})
+
+describe('agent title idle evidence', () => {
+  // #6011: a name-only title reads as idle for display, but it is not a turn signal.
+  it.each(['Codex', 'codex', 'Codex YOLO', 'Devin', 'Codex - fix the parser', 'aider', 'copilot'])(
+    'reports %j as name-only idle',
+    (title) => {
+      expect(detectAgentStatusFromTitle(title)).toBe('idle')
+      expect(detectAgentTitleIdleEvidence(title)).toBe('name-only')
+    }
+  )
+
+  it.each([
+    '✳ Task complete',
+    '◇ Gemini CLI',
+    'Codex ready',
+    'Codex idle',
+    'claude done',
+    '* Claude'
+  ])('reports %j as explicitly reported idle', (title) => {
+    expect(detectAgentStatusFromTitle(title)).toBe('idle')
+    expect(detectAgentTitleIdleEvidence(title)).toBe('explicit')
+  })
+
+  it.each(['⠋ Codex', '✦ Gemini CLI', 'codex working', '. Claude'])(
+    'reports no idle evidence for the working title %j',
+    (title) => {
+      expect(detectAgentStatusFromTitle(title)).toBe('working')
+      expect(detectAgentTitleIdleEvidence(title)).toBeNull()
+    }
+  )
+
+  it.each(['Codex - permission required', '✋ Gemini CLI', 'codex waiting'])(
+    'reports no idle evidence for the permission title %j',
+    (title) => {
+      expect(detectAgentStatusFromTitle(title)).toBe('permission')
+      expect(detectAgentTitleIdleEvidence(title)).toBeNull()
+    }
+  )
+
+  it('reports no idle evidence when the title names no agent', () => {
+    expect(detectAgentStatusFromTitle('~/repo')).toBeNull()
+    expect(detectAgentTitleIdleEvidence('~/repo')).toBeNull()
   })
 })

@@ -12,6 +12,10 @@ import {
   buildTerminalWaitResult
 } from './terminal-wait-results'
 import { buildTerminalWaitText } from './terminal-wait-tail-state'
+import {
+  hasNameOnlyStoredIdleEvidence,
+  hasPositiveStoredIdleEvidence
+} from './stored-agent-idle-evidence'
 import type { TerminalWaiter } from './runtime-terminal-contracts'
 import type { RuntimeLeafRecord, RuntimePtyWorktreeRecord } from './runtime-terminal-state-records'
 
@@ -85,7 +89,7 @@ export class RuntimeTerminalIdlePolls {
     const { waiter, leaf } = entry
     let startedForegroundPoll = false
     try {
-      if (leaf.lastAgentStatus === 'idle') {
+      if (hasPositiveStoredIdleEvidence(leaf)) {
         this.stop(entry)
         this.deps.resolve(waiter, buildTerminalWaitResult(waiter.handle, 'tui-idle', leaf))
         return
@@ -111,7 +115,15 @@ export class RuntimeTerminalIdlePolls {
         this.deps.resolve(waiter, buildTerminalWaitResult(waiter.handle, 'tui-idle', leaf))
         return
       }
-      if (leaf.lastAgentStatus === null && leaf.ptyId && !entry.foregroundPollInFlight) {
+      // Why name-only idle joins the unknown-status lane: the title names an agent but
+      // asserts nothing about its turn, so it settles only once the pane has also been
+      // quiet for the quiescence window with a live non-shell foreground process (#6011).
+      // Corroboration, never the sole authority — an explicit title or hook still wins above.
+      if (
+        (leaf.lastAgentStatus === null || hasNameOnlyStoredIdleEvidence(leaf)) &&
+        leaf.ptyId &&
+        !entry.foregroundPollInFlight
+      ) {
         const foregroundRead = this.deps.getForegroundProcess(leaf.ptyId)
         if (!foregroundRead) {
           return
@@ -144,7 +156,7 @@ export class RuntimeTerminalIdlePolls {
     const { waiter, pty } = entry
     let startedForegroundPoll = false
     try {
-      if (pty.lastAgentStatus === 'idle') {
+      if (hasPositiveStoredIdleEvidence(pty)) {
         this.stop(entry)
         this.deps.resolve(waiter, buildPtyTerminalWaitResult(waiter.handle, 'tui-idle', pty))
         return
@@ -167,7 +179,11 @@ export class RuntimeTerminalIdlePolls {
         this.deps.resolve(waiter, buildPtyTerminalWaitResult(waiter.handle, 'tui-idle', pty))
         return
       }
-      if (pty.lastAgentStatus === null && !entry.foregroundPollInFlight) {
+      // Why name-only idle joins the unknown-status lane: see the leaf tick above.
+      if (
+        (pty.lastAgentStatus === null || hasNameOnlyStoredIdleEvidence(pty)) &&
+        !entry.foregroundPollInFlight
+      ) {
         const foregroundRead = this.deps.getForegroundProcess(pty.ptyId)
         if (!foregroundRead) {
           return

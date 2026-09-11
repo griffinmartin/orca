@@ -21,10 +21,12 @@ export {
 } from './agent-title-core'
 export { isOpenCodeNativeTitle, isMeaningfulOpenCodeTerminalTitle } from './opencode-terminal-title'
 export { getAgentLabel, isClaudeAgent } from './agent-title-identity'
+export type { AgentTitleIdleEvidence } from './agent-title-status'
 export {
   clearWorkingIndicators,
   createAgentStatusTracker,
   detectAgentStatusFromTitle,
+  detectAgentTitleIdleEvidence,
   isQuarterCircleSpinnerOnlyAgentTitle,
   normalizeTerminalTitle
 } from './agent-title-status'
