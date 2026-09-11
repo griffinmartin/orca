@@ -166,25 +166,42 @@ export function parseSchedule(schedule: string, options: CronParseOptions = {}):
   return parseCronExpression(trimmed, options)
 }
 
-export function isValidAutomationSchedule(schedule: string): boolean {
+function scheduleRuns(schedule: string, options: CronParseOptions): boolean {
   try {
-    const parsed = parseSchedule(schedule, { rejectOversizedStep: true })
-    if (parsed.kind === 'cron' && !cronHasPossibleOccurrence(parsed, Date.now())) {
-      throw new Error('Cron schedule has no possible run.')
-    }
-    return true
+    const parsed = parseSchedule(schedule, options)
+    return parsed.kind !== 'cron' || cronHasPossibleOccurrence(parsed, Date.now())
   } catch {
     return false
   }
 }
 
-export function isValidAutomationCronSchedule(schedule: string): boolean {
+function cronScheduleRuns(schedule: string, options: CronParseOptions): boolean {
   try {
-    const parsed = parseCronExpression(schedule.trim(), { rejectOversizedStep: true })
-    return cronHasPossibleOccurrence(parsed, Date.now())
+    return cronHasPossibleOccurrence(parseCronExpression(schedule.trim(), options), Date.now())
   } catch {
     return false
   }
+}
+
+/** Accepts a schedule as new input, oversized-step refusal included (#15895). */
+export function isValidAutomationSchedule(schedule: string): boolean {
+  return scheduleRuns(schedule, { rejectOversizedStep: true })
+}
+
+export function isValidAutomationCronSchedule(schedule: string): boolean {
+  return cronScheduleRuns(schedule, { rejectOversizedStep: true })
+}
+
+// Whether Orca can still run a schedule it did not just receive. A row saved before the
+// oversized-step gate, or one a provider owns, keeps running the cadence it has, so reading
+// it back must not re-judge it as input — otherwise renaming an automation would demand
+// re-authoring a schedule the user never touched.
+export function isRunnableAutomationSchedule(schedule: string): boolean {
+  return scheduleRuns(schedule, {})
+}
+
+export function isRunnableAutomationCronSchedule(schedule: string): boolean {
+  return cronScheduleRuns(schedule, {})
 }
 
 export function parseAutomationRrule(rrule: string): {

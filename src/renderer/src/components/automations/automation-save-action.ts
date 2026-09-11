@@ -5,6 +5,7 @@ import {
   isValidAutomationSchedule
 } from '../../../../shared/automation-schedule-parsing'
 import { translate } from '@/i18n/i18n'
+import { acceptsAutomationDraftSchedule } from './automation-schedule-input-gate'
 import { parseDraftTime } from './automation-draft-model'
 import { saveHermesAutomation } from './automation-hermes-save'
 import { saveOrcaAutomation } from './automation-orca-save'
@@ -17,6 +18,7 @@ export function createAutomationSaveAction(context: AutomationSaveContext) {
     const { settings } = store
     const {
       draft,
+      automations,
       editingAutomationId,
       createTarget,
       editingExternalTarget,
@@ -51,7 +53,18 @@ export function createAutomationSaveAction(context: AutomationSaveContext) {
     const validateAdvancedSchedule = isHermesSave
       ? isValidAutomationCronSchedule
       : isValidAutomationSchedule
-    if (draft.preset === 'custom' && !validateAdvancedSchedule(draft.customSchedule)) {
+    const savedRrule =
+      editingAutomationId !== null
+        ? (automations.find((entry) => entry.id === editingAutomationId)?.rrule ?? null)
+        : null
+    if (
+      draft.preset === 'custom' &&
+      !acceptsAutomationDraftSchedule({
+        customSchedule: draft.customSchedule,
+        savedRrule,
+        validate: validateAdvancedSchedule
+      })
+    ) {
       toast.error(
         translate(
           'auto.components.automations.AutomationsPage.6e91dab317',

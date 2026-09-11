@@ -9,8 +9,8 @@
 import type { Automation, ExternalAutomationJob } from '../../../../shared/automations-types'
 import { getAutomationRunRepoId } from '../../../../shared/automation-run-identity'
 import {
-  isValidAutomationCronSchedule,
-  isValidAutomationSchedule,
+  isRunnableAutomationCronSchedule,
+  isRunnableAutomationSchedule,
   tryParseAutomationRrule
 } from '../../../../shared/automation-schedule-parsing'
 import type { AutomationDraft } from './AutomationEditorDialog'
@@ -19,7 +19,7 @@ import { getAutomationSetupDecisionDraftValue } from './automation-setup-decisio
 
 export function buildAutomationEditDraft(automation: Automation): AutomationDraft {
   const schedule = tryParseAutomationRrule(automation.rrule)
-  const hasCustomSchedule = !schedule && isValidAutomationSchedule(automation.rrule)
+  const hasCustomSchedule = !schedule && isRunnableAutomationSchedule(automation.rrule)
   return {
     name: automation.name,
     prompt: automation.prompt,
@@ -52,7 +52,7 @@ export function buildExternalAutomationEditDraft(
   placement: { projectId: string; workspaceId: string }
 ): AutomationDraft {
   const rawSchedule = job.rawSchedule?.trim() ?? ''
-  const hasCustomSchedule = isValidAutomationCronSchedule(rawSchedule)
+  const hasCustomSchedule = isRunnableAutomationCronSchedule(rawSchedule)
   return {
     name: job.name,
     prompt: job.prompt ?? job.promptPreview,
