@@ -2,12 +2,19 @@
 // lifecycle hooks from an array of `[[hooks]]` tables. There is no JSON settings
 // file to reuse the shared JSON installer with, and no TOML library is vendored,
 // so Orca manages only its own marker-delimited block: install rewrites the
-// block, remove strips it, and arbitrary user config outside the markers is left
-// untouched. Appending table headers is always valid TOML, so the block can live
-// at the end of any existing file.
+// block, remove strips it, and user config is left untouched apart from hook
+// tables Orca itself emitted. Appending table headers is always valid TOML, so
+// the block can live at the end of any existing file.
 
 import { MANAGED_HOOK_TIMEOUT_SECONDS } from '../agent-hooks/installer-utils'
-import { escapeRegex } from '../../shared/string-utils'
+import {
+  findManagedTomlBlocks,
+  findRecognizedManagedTables,
+  stripManagedTomlRegions,
+  type ManagedTomlMarkers,
+  type ManagedTomlRegion,
+  type RecognizedManagedTable
+} from '../agent-hooks/managed-toml-ownership'
 
 // Why: mirror the Claude-compatible events Orca normalizes for status. Kimi uses
 // these exact event names (see normalizeKimiEvent), so each maps to a
@@ -22,19 +29,78 @@ export const KIMI_HOOK_EVENTS = [
   'StopFailure'
 ] as const
 
-const BLOCK_START = '# >>> orca-managed-kimi-hooks (managed by Orca; do not edit) >>>'
-const BLOCK_END = '# <<< orca-managed-kimi-hooks <<<'
+const MARKERS: ManagedTomlMarkers = {
+  startMarker: '# >>> orca-managed-kimi-hooks (managed by Orca; do not edit) >>>',
+  endMarker: '# <<< orca-managed-kimi-hooks <<<'
+}
+const HOOK_TABLE_HEADER = '[[hooks]]'
 
-// Matches the managed block plus any blank lines immediately preceding it so
-// repeated install/remove cycles do not accumulate whitespace. The `|$`
-// fallback also matches from BLOCK_START to end-of-file when the trailing
-// BLOCK_END marker is missing (e.g. a hand-edit deleted it): the managed block
-// is always written last, so this recovers orphaned hook tables and lets
-// install re-converge in one step instead of appending a duplicate block.
-const MANAGED_BLOCK_RE = new RegExp(
-  `\\n*${escapeRegex(BLOCK_START)}[\\s\\S]*?(?:${escapeRegex(BLOCK_END)}[^\\n]*|$)`,
-  'g'
-)
+export type ManagedCommandMatcher = (command: string | undefined) => boolean
+
+// A `[[hooks]]` table Orca could have emitted: exactly the three keys
+// buildManagedKimiHooksBlock writes, a known event, a numeric timeout and a
+// command still pointing at the managed script. Recognition is what reclaims
+// Orca's tables no matter where a hand-edit left them (#18861), so it must not
+// match a table the user wrote or adjusted.
+function matchManagedHookTable(
+  lines: readonly string[],
+  index: number,
+  isManagedCommand: ManagedCommandMatcher
+): { lineCount: number; value: string } | null {
+  if (lines[index].trim() !== HOOK_TABLE_HEADER) {
+    return null
+  }
+  const pairs = new Map<string, string>()
+  let cursor = index + 1
+  while (cursor < lines.length) {
+    const line = lines[cursor].trim()
+    // A blank, the next table header or a comment (the end marker included)
+    // ends the table's key run; anything else unexpected leaves it unrecognized.
+    if (line === '' || line.startsWith('[') || line.startsWith('#')) {
+      break
+    }
+    const pair = line.match(/^([A-Za-z_][\w-]*)\s*=\s*(.*)$/)
+    if (!pair || pairs.has(pair[1])) {
+      return null
+    }
+    pairs.set(pair[1], pair[2].trim())
+    cursor++
+  }
+  if (pairs.size !== 3) {
+    return null
+  }
+  const event = pairs.get('event')?.match(/^"([^"]+)"$/)?.[1]
+  if (!event || !(KIMI_HOOK_EVENTS as readonly string[]).includes(event)) {
+    return null
+  }
+  if (!/^\d+$/.test(pairs.get('timeout') ?? '')) {
+    return null
+  }
+  // Raw (still-escaped) literal; createManagedCommandMatcher normalizes separators itself.
+  const command = pairs.get('command')?.match(/^"((?:[^"\\]|\\.)*)"$/)?.[1]
+  return isManagedCommand(command) ? { lineCount: cursor - index, value: event } : null
+}
+
+function recognizeManagedTables(
+  configText: string,
+  isManagedCommand: ManagedCommandMatcher
+): RecognizedManagedTable<string>[] {
+  return findRecognizedManagedTables(configText, (lines, index) =>
+    matchManagedHookTable(lines, index, isManagedCommand)
+  )
+}
+
+// Orca owns two things here: whatever sits inside a matched marker pair, and
+// every table it can positively recognize wherever that table ended up.
+function findOwnedRegions(
+  configText: string,
+  isManagedCommand: ManagedCommandMatcher
+): ManagedTomlRegion[] {
+  return [
+    ...findManagedTomlBlocks(configText, MARKERS),
+    ...recognizeManagedTables(configText, isManagedCommand)
+  ]
+}
 
 // TOML basic (double-quoted) string. The managed command may contain single
 // quotes (from POSIX quoting) but no double quotes or backslashes on the paths
@@ -50,7 +116,7 @@ function tomlBasicString(value: string): string {
   return `"${escaped}"`
 }
 
-export function buildManagedKimiHooksBlock(command: string): string {
+export function buildManagedKimiHooksBlock(command: string, eol = '\n'): string {
   const commandLiteral = tomlBasicString(command)
   // Omit `matcher`: Kimi treats it as a regex (so Claude's literal "*" is
   // invalid) and an absent matcher already matches every tool.
@@ -58,52 +124,58 @@ export function buildManagedKimiHooksBlock(command: string): string {
   // the normal dead-endpoint bound.
   const entries = KIMI_HOOK_EVENTS.map((event) =>
     [
-      `[[hooks]]`,
+      HOOK_TABLE_HEADER,
       `event = "${event}"`,
       `command = ${commandLiteral}`,
       `timeout = ${MANAGED_HOOK_TIMEOUT_SECONDS}`
-    ].join('\n')
+    ].join(eol)
   )
-  return [BLOCK_START, ...entries, BLOCK_END].join('\n')
+  return [MARKERS.startMarker, ...entries, MARKERS.endMarker].join(eol)
 }
 
-export function applyManagedKimiHooks(configText: string, command: string): string {
-  const withoutManaged = configText.replace(MANAGED_BLOCK_RE, '').replace(/\s+$/, '')
-  const block = buildManagedKimiHooksBlock(command)
-  return withoutManaged.length > 0 ? `${withoutManaged}\n\n${block}\n` : `${block}\n`
+function detectEol(configText: string): string {
+  return configText.includes('\r\n') ? '\r\n' : '\n'
 }
 
-export function removeManagedKimiHooks(configText: string): { text: string; changed: boolean } {
-  // Why: compare instead of MANAGED_BLOCK_RE.test() — the regex carries the `g`
-  // flag, so .test() advances lastIndex and would behave inconsistently across
-  // calls. .replace() ignores/resets lastIndex, so it is safe to reuse.
-  const stripped = configText.replace(MANAGED_BLOCK_RE, '')
-  if (stripped === configText) {
+export function applyManagedKimiHooks(
+  configText: string,
+  command: string,
+  isManagedCommand: ManagedCommandMatcher
+): string {
+  const eol = detectEol(configText)
+  const withoutManaged = stripManagedTomlRegions(
+    configText,
+    findOwnedRegions(configText, isManagedCommand)
+  ).text.replace(/\s+$/, '')
+  const block = buildManagedKimiHooksBlock(command, eol)
+  return withoutManaged.length > 0
+    ? `${withoutManaged}${eol}${eol}${block}${eol}`
+    : `${block}${eol}`
+}
+
+export function removeManagedKimiHooks(
+  configText: string,
+  isManagedCommand: ManagedCommandMatcher
+): { text: string; changed: boolean } {
+  const stripped = stripManagedTomlRegions(
+    configText,
+    findOwnedRegions(configText, isManagedCommand)
+  )
+  if (!stripped.changed) {
     return { text: configText, changed: false }
   }
-  const trimmed = stripped.replace(/\s+$/, '')
-  return { text: trimmed.length > 0 ? `${trimmed}\n` : '', changed: true }
+  const eol = detectEol(configText)
+  const trimmed = stripped.text.replace(/\s+$/, '')
+  return { text: trimmed.length > 0 ? `${trimmed}${eol}` : '', changed: true }
 }
 
-// Returns the managed events present in the block whose command still matches an
-// Orca-managed script (by filename, so a moved userData path is still swept).
+// Events a managed table is live for, counted wherever the table sits (by script
+// filename, so a moved userData path is still seen). Status must include tables
+// stranded outside the markers — those still fire, so reporting them absent
+// would tell the user a hook is uninstalled while Orca keeps receiving events.
 export function readManagedKimiHookEvents(
   configText: string,
-  isManagedCommand: (command: string | undefined) => boolean
+  isManagedCommand: ManagedCommandMatcher
 ): Set<string> {
-  const present = new Set<string>()
-  const match = configText.match(MANAGED_BLOCK_RE)
-  if (!match) {
-    return present
-  }
-  const blockText = match[0]
-  // Split on each table header and pair the `event`/`command` lines within.
-  for (const chunk of blockText.split('[[hooks]]').slice(1)) {
-    const event = chunk.match(/event\s*=\s*"([^"]+)"/)?.[1]
-    const command = chunk.match(/command\s*=\s*"((?:[^"\\]|\\.)*)"/)?.[1]
-    if (event && isManagedCommand(command)) {
-      present.add(event)
-    }
-  }
-  return present
+  return new Set(recognizeManagedTables(configText, isManagedCommand).map((table) => table.value))
 }
