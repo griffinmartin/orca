@@ -30,7 +30,16 @@ export async function prepareCodexRuntimeHomeForLaunch(
     }
   }
   const ensureRealHomeHooksIfSelected = async (): Promise<boolean> => {
-    if (target?.runtime === 'wsl' || !runtimeHome.isHostSystemDefaultRealHomeSelected(launchEnv)) {
+    // Why install-only (STA-5679): ~/.codex is user-global, so passing the off switch through
+    // here sweeps entries this profile may never have written — a second profile's first
+    // hooks-off Codex spawn would delete the primary profile's hook and its trust records.
+    // Startup was made install-only for the same reason; removal belongs to the Settings
+    // toggle, which still converges opt-out through removeManagedAgentHooks().
+    if (
+      target?.runtime === 'wsl' ||
+      !isAgentStatusHooksEnabled(state.store?.getSettings()) ||
+      !runtimeHome.isHostSystemDefaultRealHomeSelected(launchEnv)
+    ) {
       return false
     }
     // Why (flag ON, system default): the hook entry must exist — appended last
@@ -38,7 +47,7 @@ export async function prepareCodexRuntimeHomeForLaunch(
     // the pane spawns. An incapable grant flips the lane gate so the launch
     // below falls back to the managed home instead of a status-blind pane.
     await ensureRealHomeCodexHookState({
-      hooksEnabled: isAgentStatusHooksEnabled(state.store?.getSettings()),
+      hooksEnabled: true,
       userDataPath: app.getPath('userData')
     })
     return true
