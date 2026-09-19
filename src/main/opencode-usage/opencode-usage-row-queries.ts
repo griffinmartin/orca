@@ -53,14 +53,9 @@ function getAssistantSessionMessageCount(db: Database.Database): number {
   return row?.count ?? 0
 }
 
-/**
- * SQL expression for a session's cache-write counter.
- * @param db - A readonly SyncDatabase instance for opencode.db.
- * @param alias - Table alias prefix, e.g. `s.`, when the column is used in a join.
- * @returns The qualified column name, or `0` when the DB predates `tokens_cache_write`.
- */
-function getSessionCacheWriteColumn(db: Database.Database, alias = ''): string {
-  return columnExists(db, 'session', 'tokens_cache_write') ? `${alias}tokens_cache_write` : '0'
+// Why: tokens_cache_write arrived after the other counters; older DBs lack it.
+function getSessionCacheWriteColumn(hasCacheWrite: boolean, alias = ''): string {
+  return hasCacheWrite ? `${alias}tokens_cache_write` : '0'
 }
 
 function canReadSessionUsageRows(db: Database.Database): boolean {
@@ -72,16 +67,11 @@ function canReadSessionUsageRows(db: Database.Database): boolean {
   )
 }
 
-/**
- * Count sessions with materialized token totals, cache columns included.
- * @param db - A readonly SyncDatabase instance for opencode.db.
- * @returns Number of sessions with any usage, or 0 when the totals columns are absent.
- */
-function getSessionUsageRowCount(db: Database.Database): number {
+function getSessionUsageRowCount(db: Database.Database, hasCacheWrite: boolean): number {
   if (!canReadSessionUsageRows(db)) {
     return 0
   }
-  const cacheWrite = getSessionCacheWriteColumn(db)
+  const cacheWrite = getSessionCacheWriteColumn(hasCacheWrite)
   const row = db
     .prepare(
       `SELECT COUNT(*) AS count
@@ -92,16 +82,11 @@ function getSessionUsageRowCount(db: Database.Database): number {
   return row?.count ?? 0
 }
 
-/**
- * Read one usage row per session from the materialized `session.tokens_*` columns.
- * @param db - A readonly SyncDatabase instance for opencode.db.
- * @returns Rows whose `data` mirrors OpenCode's message `tokens` shape, so
- *   `parseOpenCodeUsageRow` treats them exactly like per-message rows.
- */
-function selectSessionUsageRows(db: Database.Database): OpenCodeUsageRow[] {
+// Why: synthesizes rows shaped like message.data so parseOpenCodeUsageRow treats them identically.
+function selectSessionUsageRows(db: Database.Database, hasCacheWrite: boolean): OpenCodeUsageRow[] {
   const projectJoin = getProjectJoin(db)
   const sessionModelSelect = getSessionModelSelect(db)
-  const cacheWrite = getSessionCacheWriteColumn(db, 's.')
+  const cacheWrite = getSessionCacheWriteColumn(hasCacheWrite, 's.')
   const rows = db
     .prepare(
       `SELECT s.id, s.id AS session_id, s.time_created, s.time_updated,
@@ -147,12 +132,6 @@ function selectSessionUsageRows(db: Database.Database): OpenCodeUsageRow[] {
   }))
 }
 
-/**
- * Select usage rows from whichever schema generation the database has.
- * @param db - A readonly SyncDatabase instance for opencode.db.
- * @returns Materialized session rows when available, else `session_message`
- *   rows, else legacy `message` rows; empty when no usage tables exist.
- */
 export function selectUsageRows(db: Database.Database): OpenCodeUsageRow[] {
   if (!tableExists(db, 'session')) {
     return []
@@ -160,8 +139,9 @@ export function selectUsageRows(db: Database.Database): OpenCodeUsageRow[] {
 
   // Why: newer OpenCode DBs maintain session-level token/cost totals. Reading
   // one aggregate row per session is faster than parsing every message blob.
-  if (getSessionUsageRowCount(db) > 0) {
-    return selectSessionUsageRows(db)
+  const hasCacheWrite = columnExists(db, 'session', 'tokens_cache_write')
+  if (getSessionUsageRowCount(db, hasCacheWrite) > 0) {
+    return selectSessionUsageRows(db, hasCacheWrite)
   }
 
   const projectJoin = getProjectJoin(db)
