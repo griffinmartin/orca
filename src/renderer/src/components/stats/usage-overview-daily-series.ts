@@ -45,6 +45,17 @@ export function countActiveDays(days: string[]): number {
   return new Set(days).size
 }
 
+function emptyDailyTotals(day: string): Omit<UsageOverviewDailyPoint, 'intensity'> {
+  return {
+    day,
+    totalTokens: 0,
+    claudeTokens: 0,
+    codexTokens: 0,
+    openCodeTokens: 0,
+    museTokens: 0
+  }
+}
+
 /**
  * Merge every provider's daily series into one per-day total with a rank intensity.
  * @param input - Per-provider scan state, summary, and daily series.
@@ -54,13 +65,7 @@ export function buildDailyOverview(input: UsageOverviewInput): UsageOverviewDail
   const byDay = new Map<string, Omit<UsageOverviewDailyPoint, 'intensity'>>()
 
   for (const entry of input.claude.daily) {
-    const current = byDay.get(entry.day) ?? {
-      day: entry.day,
-      totalTokens: 0,
-      claudeTokens: 0,
-      codexTokens: 0,
-      openCodeTokens: 0
-    }
+    const current = byDay.get(entry.day) ?? emptyDailyTotals(entry.day)
     const total = getClaudeDailyTotal(entry)
     current.totalTokens += total
     current.claudeTokens += total
@@ -68,28 +73,23 @@ export function buildDailyOverview(input: UsageOverviewInput): UsageOverviewDail
   }
 
   for (const entry of input.codex.daily) {
-    const current = byDay.get(entry.day) ?? {
-      day: entry.day,
-      totalTokens: 0,
-      claudeTokens: 0,
-      codexTokens: 0,
-      openCodeTokens: 0
-    }
+    const current = byDay.get(entry.day) ?? emptyDailyTotals(entry.day)
     current.totalTokens += entry.totalTokens
     current.codexTokens += entry.totalTokens
     byDay.set(entry.day, current)
   }
 
   for (const entry of input.opencode.daily) {
-    const current = byDay.get(entry.day) ?? {
-      day: entry.day,
-      totalTokens: 0,
-      claudeTokens: 0,
-      codexTokens: 0,
-      openCodeTokens: 0
-    }
+    const current = byDay.get(entry.day) ?? emptyDailyTotals(entry.day)
     current.totalTokens += entry.totalTokens
     current.openCodeTokens += entry.totalTokens
+    byDay.set(entry.day, current)
+  }
+
+  for (const entry of input.muse.daily) {
+    const current = byDay.get(entry.day) ?? emptyDailyTotals(entry.day)
+    current.totalTokens += entry.totalTokens
+    current.museTokens += entry.totalTokens
     byDay.set(entry.day, current)
   }
 
@@ -127,16 +127,7 @@ export function getRecentUsageDays(
     const date = new Date(end)
     date.setDate(end.getDate() - offset)
     const day = formatLocalDay(date)
-    result.push(
-      byDay.get(day) ?? {
-        day,
-        totalTokens: 0,
-        claudeTokens: 0,
-        codexTokens: 0,
-        openCodeTokens: 0,
-        intensity: 0
-      }
-    )
+    result.push(byDay.get(day) ?? { ...emptyDailyTotals(day), intensity: 0 })
   }
   return result
 }

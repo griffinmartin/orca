@@ -79,6 +79,7 @@ describe('usage overview model', () => {
       reasoningOutputTokens: 300,
       totalTokens: 3_200,
       estimatedCostUsd: 0.02,
+      hasUnpricedModels: false,
       topModel: 'gpt-5.4',
       topProject: 'orca-secondary',
       hasAnyCodexData: true
@@ -158,7 +159,8 @@ describe('usage overview model', () => {
         scanState: enabledOpenCodeScanState(),
         summary: openCodeSummary,
         daily: openCodeDaily
-      }
+      },
+      muse: { scanState: null, summary: null, daily: [] }
     })
 
     expect(overview.totalTokens).toBe(10_800)
@@ -177,6 +179,7 @@ describe('usage overview model', () => {
       claudeTokens: 2_500,
       codexTokens: 2_000,
       openCodeTokens: 0,
+      museTokens: 0,
       intensity: 4
     })
     expect(overview.providers.find((provider) => provider.id === 'codex')).toMatchObject({
@@ -205,6 +208,90 @@ describe('usage overview model', () => {
     expect(rankUsageIntensities([])).toEqual([])
   })
 
+  it('marks the overview cost partial when Codex priced some models but not all', () => {
+    function overviewWithUnpricedCodex(hasUnpricedModels: boolean) {
+      const codexSummary: CodexUsageSummary = {
+        scope: 'orca',
+        range: '30d',
+        sessions: 1,
+        events: 3,
+        inputTokens: 2_000,
+        cachedInputTokens: 800,
+        outputTokens: 1_200,
+        reasoningOutputTokens: 300,
+        totalTokens: 3_200,
+        estimatedCostUsd: 0.02,
+        hasUnpricedModels,
+        topModel: 'gpt-6-astra',
+        topProject: 'orca-secondary',
+        hasAnyCodexData: true
+      }
+      return buildUsageOverview({
+        claude: { scanState: null, summary: null, daily: [] },
+        codex: { scanState: enabledCodexScanState(), summary: codexSummary, daily: [] },
+        opencode: { scanState: null, summary: null, daily: [] },
+        muse: { scanState: null, summary: null, daily: [] }
+      })
+    }
+
+    // The provider's own total is a real number, so the null-cost path never fires for it.
+    expect(overviewWithUnpricedCodex(true).estimatedCostUsd).toBeCloseTo(0.02)
+    expect(overviewWithUnpricedCodex(true).hasPartialCost).toBe(true)
+    expect(overviewWithUnpricedCodex(false).hasPartialCost).toBe(false)
+  })
+
+  it('folds Muse tokens into the overview without a partial-cost warning when nothing is priced', () => {
+    const overview = buildUsageOverview({
+      claude: { scanState: null, summary: null, daily: [] },
+      codex: { scanState: null, summary: null, daily: [] },
+      opencode: { scanState: null, summary: null, daily: [] },
+      muse: {
+        scanState: {
+          enabled: true,
+          isScanning: false,
+          lastScanStartedAt: 1,
+          lastScanCompletedAt: 2,
+          lastScanError: null,
+          hasAnyMuseData: true
+        },
+        summary: {
+          scope: 'orca',
+          range: '30d',
+          sessions: 2,
+          events: 5,
+          inputTokens: 28_000,
+          cachedInputTokens: 27_000,
+          outputTokens: 300,
+          reasoningOutputTokens: 160,
+          totalTokens: 28_300,
+          topModel: 'muse-spark-1.3',
+          topProject: 'orca',
+          hasAnyMuseData: true
+        },
+        daily: [
+          {
+            day: '2026-09-22',
+            inputTokens: 28_000,
+            cachedInputTokens: 27_000,
+            outputTokens: 300,
+            reasoningOutputTokens: 160,
+            totalTokens: 28_300
+          }
+        ]
+      }
+    })
+
+    expect(overview.providers.find((provider) => provider.id === 'muse')).toMatchObject({
+      newInputTokens: 1_000,
+      cacheTokens: 27_000,
+      totalTokens: 28_300,
+      estimatedCostUsd: null
+    })
+    expect(overview.bestDay).toMatchObject({ day: '2026-09-22', museTokens: 28_300 })
+    expect(overview.estimatedCostUsd).toBeNull()
+    expect(overview.hasPartialCost).toBe(false)
+  })
+
   it('pads recent usage days with zero-token cells', () => {
     const recent = getRecentUsageDays(
       [
@@ -214,6 +301,7 @@ describe('usage overview model', () => {
           claudeTokens: 2_500,
           codexTokens: 2_000,
           openCodeTokens: 0,
+          museTokens: 0,
           intensity: 4
         }
       ],
@@ -228,6 +316,7 @@ describe('usage overview model', () => {
         claudeTokens: 0,
         codexTokens: 0,
         openCodeTokens: 0,
+        museTokens: 0,
         intensity: 0
       },
       {
@@ -236,6 +325,7 @@ describe('usage overview model', () => {
         claudeTokens: 2_500,
         codexTokens: 2_000,
         openCodeTokens: 0,
+        museTokens: 0,
         intensity: 4
       },
       {
@@ -244,6 +334,7 @@ describe('usage overview model', () => {
         claudeTokens: 0,
         codexTokens: 0,
         openCodeTokens: 0,
+        museTokens: 0,
         intensity: 0
       }
     ])
@@ -253,7 +344,8 @@ describe('usage overview model', () => {
     const overview = buildUsageOverview({
       claude: { scanState: null, summary: null, daily: [] },
       codex: { scanState: null, summary: null, daily: [] },
-      opencode: { scanState: null, summary: null, daily: [] }
+      opencode: { scanState: null, summary: null, daily: [] },
+      muse: { scanState: null, summary: null, daily: [] }
     })
 
     expect(overview.hasAnyEnabledProvider).toBe(false)
@@ -283,7 +375,8 @@ describe('usage overview model', () => {
         summary: null,
         daily: codexDaily
       },
-      opencode: { scanState: null, summary: null, daily: [] }
+      opencode: { scanState: null, summary: null, daily: [] },
+      muse: { scanState: null, summary: null, daily: [] }
     })
 
     expect(overview.daily).toHaveLength(130_000)

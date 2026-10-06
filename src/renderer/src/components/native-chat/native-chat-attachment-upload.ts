@@ -10,6 +10,7 @@ import { getConnectionIdFromState } from '@/lib/connection-context'
 import { getRuntimeEnvironmentIdForWorktree } from '@/lib/worktree-runtime-owner'
 import type { AppState } from '@/store/types'
 import { reportTerminalDropUploadSkipsAndFailures } from '../terminal-pane/terminal-drop-upload-report'
+import { NATIVE_FILE_DROP_MAX_PATHS } from '../../../../shared/native-file-drop'
 import {
   findTerminalTabWorktreeId,
   resolveNativeChatFileLinkContext
@@ -46,7 +47,7 @@ type NativeChatAttachmentOwnerState = Pick<
   | 'sshConnectionStates'
   | 'tabsByWorktree'
   | 'worktreesByRepo'
->
+> & { floatingWorkspacePath?: AppState['floatingWorkspacePath'] }
 
 /** Resolve who owns the composer's backing worktree at attach time. Mirrors the
  *  terminal drop resolver's order: runtime owner first, then SSH vs local. */
@@ -82,11 +83,17 @@ export function resolveNativeChatAttachmentOwnerForWorktree(
   if (!worktreePath) {
     return { kind: 'not-ready' }
   }
-  return {
-    kind: 'ssh',
-    connectionId,
-    worktreePath,
-    ...captureDirectSshMutationExpectation(state, connectionId)
+  try {
+    return {
+      kind: 'ssh',
+      connectionId,
+      worktreePath,
+      ...captureDirectSshMutationExpectation(state, connectionId)
+    }
+  } catch {
+    // The connection's generation is gone (disconnect mid-attach). That is an
+    // unknown owner, not a reason to throw out of the drop/IME handler.
+    return { kind: 'not-ready' }
   }
 }
 
@@ -94,6 +101,28 @@ export function nativeChatWorktreeNotReadyNotice(): string {
   return translate(
     'components.native-chat.composer.worktreeNotReady',
     'Worktree not ready — try again in a moment.'
+  )
+}
+
+export function nativeChatAttachmentOwnerChangedNotice(): string {
+  return translate(
+    'components.native-chat.composer.attachmentOwnerChanged',
+    'This workspace changed hosts while attaching — drop the files again.'
+  )
+}
+
+export function nativeChatAttachmentUnreadableNotice(): string {
+  return translate(
+    'components.native-chat.composer.attachmentUnreadable',
+    "Couldn't read the dropped files."
+  )
+}
+
+export function nativeChatTooManyAttachmentsNotice(): string {
+  return translate(
+    'components.native-chat.composer.tooManyAttachments',
+    'Attach {{value0}} or fewer files at a time.',
+    { value0: NATIVE_FILE_DROP_MAX_PATHS }
   )
 }
 

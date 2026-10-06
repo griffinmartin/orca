@@ -14,6 +14,7 @@ import { RuntimeRpcCallQueueOverloadError } from '../../shared/runtime-rpc-call-
 import type { RuntimeRpcFailure, RuntimeRpcResponse } from '../../shared/runtime-rpc-envelope'
 import type { RuntimeStatus } from '../../shared/runtime-types'
 import type { Store } from '../persistence'
+import { readSettingsWithRuntimeEnvironmentPreference } from './runtime-environment-preference'
 import { clearBrowserRoutePartitionStorageForEnvironment } from '../browser/browser-route-partition-storage-runtime'
 import { retireBrowserRoutePartitionStorageForEnvironment } from '../browser/browser-route-partition-storage-retirement'
 import { verifyAndAddRuntimeEnvironmentFromPairingCode } from './runtime-environment-pairing-verification'
@@ -27,7 +28,8 @@ import {
 import {
   clearRuntimeEnvironmentManualDisconnect,
   isRuntimeEnvironmentManuallyDisconnected,
-  markRuntimeEnvironmentManuallyDisconnected
+  markRuntimeEnvironmentManuallyDisconnected,
+  RUNTIME_MANUALLY_DISCONNECTED_MESSAGE
 } from './runtime-environment-manual-disconnect'
 import {
   callRuntimeEnvironment,
@@ -42,7 +44,7 @@ function manuallyDisconnectedResponse(
     ok: false,
     error: {
       code: 'runtime_manually_disconnected',
-      message: 'Runtime environment is manually disconnected.'
+      message: RUNTIME_MANUALLY_DISCONNECTED_MESSAGE
     },
     _meta: { runtimeId: environment.runtimeId }
   }
@@ -64,9 +66,11 @@ export function registerRuntimeEnvironmentConnectivityHandlers({
   ipcMain.handle('runtimeEnvironments:getStatusSnapshots', () =>
     getRuntimeEnvironmentStatusSnapshots()
   )
-  ipcMain.handle('runtimeEnvironments:list', () =>
-    listEnvironments(getUserDataPath()).map(redactRuntimeEnvironment)
-  )
+  ipcMain.handle('runtimeEnvironments:list', () => {
+    const environments = listEnvironments(getUserDataPath())
+    readSettingsWithRuntimeEnvironmentPreference(store, getUserDataPath())
+    return environments.map(redactRuntimeEnvironment)
+  })
   ipcMain.handle(
     'runtimeEnvironments:addFromPairingCode',
     (
@@ -226,6 +230,7 @@ function registerPassiveCallHandler(getUserDataPath: () => string): void {
         params?: unknown
         timeoutMs?: number
         expectedEnvironmentPairingRevision?: number
+        expectedEnvironmentRuntimeId?: string
       }
     ): Promise<RuntimeRpcResponse<unknown>> => {
       const environment = resolveEnvironment(getUserDataPath(), args.selector)
@@ -240,7 +245,9 @@ function registerPassiveCallHandler(getUserDataPath: () => string): void {
           args.method,
           args.params,
           args.timeoutMs,
-          args.expectedEnvironmentPairingRevision
+          args.expectedEnvironmentPairingRevision,
+          undefined,
+          { expectedEnvironmentRuntimeId: args.expectedEnvironmentRuntimeId }
         )
       } catch (error) {
         const failure = runtimeEnvironmentCallFailure(environment, args.method, error)

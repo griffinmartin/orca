@@ -1,7 +1,9 @@
 import { useMemo, useRef, useState } from 'react'
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native'
 import { ArrowUp, Check, CircleHelp } from 'lucide-react-native'
+import { MobileNativeChatCardHeaderAction } from './MobileNativeChatCardHeaderAction'
 import { colors, radii, spacing, typography } from '../theme/mobile-theme'
+import { mobileNativeChatInputStyles } from './mobile-native-chat-input-styles'
 import {
   formatQuestionAnswerByIndexes,
   formatQuestionAnswerWithOtherByIndexes,
@@ -12,13 +14,21 @@ import {
 type Props = {
   question: MobileChatQuestion
   onAnswer: (text: string) => Promise<boolean>
+  onCancel?: (prompt?: NonNullable<MobileChatQuestion['prompt']>) => Promise<boolean>
+  /** Fold the card to a strip and free Send, writing nothing. */
+  onCollapse?: () => void
 }
 
 /** Renders an agent's choice prompt as a tappable card. Single-select answers
  *  on tap; multi-select toggles then Submits; an always-present text entry lets
  *  the user answer freely (the escape hatch) when the heuristic misreads the
  *  options or none apply. */
-export function MobileNativeChatQuestion({ question, onAnswer }: Props): React.JSX.Element {
+export function MobileNativeChatQuestion({
+  question,
+  onAnswer,
+  onCancel,
+  onCollapse
+}: Props): React.JSX.Element {
   const [selectedOptionIndexes, setSelectedOptionIndexes] = useState<number[]>([])
   const [freeText, setFreeText] = useState('')
   const [sending, setSending] = useState(false)
@@ -102,6 +112,12 @@ export function MobileNativeChatQuestion({ question, onAnswer }: Props): React.J
       <View style={styles.header}>
         <CircleHelp size={15} color={colors.accentBlue} strokeWidth={2.2} />
         <Text style={styles.question}>{question.question}</Text>
+        <MobileNativeChatCardHeaderAction
+          prompt={question.prompt}
+          onCancel={onCancel}
+          onCollapse={onCollapse}
+          disabled={sending}
+        />
       </View>
 
       {hasOptions ? (
@@ -159,7 +175,7 @@ export function MobileNativeChatQuestion({ question, onAnswer }: Props): React.J
       {allowOther ? (
         <View style={styles.freeTextRow}>
           <TextInput
-            style={styles.freeInput}
+            style={mobileNativeChatInputStyles.freeInput}
             value={freeText}
             onChangeText={setFreeText}
             placeholder={hasOptions ? 'Or type a reply…' : 'Type your reply…'}
@@ -280,18 +296,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'flex-end',
     gap: spacing.sm
-  },
-  freeInput: {
-    flex: 1,
-    minHeight: 40,
-    maxHeight: 120,
-    color: colors.textPrimary,
-    fontSize: typography.bodySize + 1,
-    backgroundColor: colors.bgRaised,
-    borderRadius: radii.input,
-    paddingHorizontal: spacing.md,
-    paddingTop: spacing.sm,
-    paddingBottom: spacing.sm
   },
   freeSend: {
     width: 40,

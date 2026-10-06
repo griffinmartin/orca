@@ -1,5 +1,6 @@
 import { StatsPane } from '../stats/StatsPane'
 import { AppearancePane } from './AppearancePane'
+import { ChatSettingsSection } from './ChatSettingsSection'
 import { InputPane } from './InputPane'
 import { NotificationsPane } from './NotificationsPane'
 import { ShortcutsPane } from './ShortcutsPane'
@@ -33,6 +34,18 @@ export function renderAppearanceSettingsSection(context: SettingsRenderContext):
         />
       ) : null}
     </SettingsSection>
+  )
+}
+
+export function renderChatSettingsSection(context: SettingsRenderContext): React.JSX.Element {
+  const { model, navigation, view } = context
+  return (
+    <ChatSettingsSection
+      settings={model.settings}
+      updateSettings={model.updateSettings}
+      searchEntries={navigation.getSectionSearchEntries('chat')}
+      isMounted={view.isSectionMounted('chat')}
+    />
   )
 }
 
@@ -103,7 +116,7 @@ export function renderStatsSettingsSection(context: SettingsRenderContext): Reac
       title={translate('auto.components.settings.Settings.954a8f5aef', 'Stats & Usage')}
       description={translate(
         'auto.components.settings.Settings.8acf3f22e0',
-        'Orca stats plus Claude, Codex, OpenCode token analytics and Grok subscription usage.'
+        'Orca stats plus Claude, Codex, OpenCode, Muse token analytics and Grok subscription usage.'
       )}
       searchEntries={navigation.getSectionSearchEntries('stats')}
     >

@@ -339,8 +339,22 @@ straight to the addon drops the duplicate.
 The artifact is optional in `RELAY_ARTIFACTS`: hashed when present, so a relay
 carrying it never shares an immutable directory with one that does not, and
 never probed, because requiring a file only a Windows build machine can produce
-would make a correct relay read as MISSING and redeploy forever. A relay built
-on any other OS keeps using the scan.
+would make a correct relay read as MISSING and redeploy forever. A local build
+on another OS has no addon, so its Windows relays use the scan.
+
+Every desktop package ships relays for Windows hosts, not just the Windows
+installer, and the addon also carries the relay launcher (`spawnOutsideJob`,
+see `windows-edr-posture.md`). So one Windows job,
+`.github/workflows/relay-windows-process-tree.yml`, compiles both arches and
+uploads the `relay-windows-process-tree` artifact. The release and dev-channel
+macOS and Linux packaging jobs download it into `.build/windows-process-tree`
+and set `ORCA_REQUIRE_RELAY_NATIVE_ADDONS=x64,arm64`, as the Windows jobs do.
+`config/scripts/relay-windows-process-tree-staging.mjs` checks each staged
+binary for its PE machine, the missing `ReadProcessMemory` import, and the
+`spawnOutsideJob` export. Without that last check a pre-launcher build from an
+old `.build` dir or cached artifact would pass. A required arch that fails any
+check fails the build. An unrequired one (a local build) is left out, and that
+relay uses the scan and the WMI launch fallback.
 
 ## Why the package is patched
 
@@ -360,10 +374,9 @@ on any other OS keeps using the scan.
    `node_addon_api.gyp` resolves outside the repo and hourly Windows builds
    die at configure. `node-pty` is patched the same way for the same reason.
 4. **No PEB reads, no `PROCESS_VM_READ`.** See below.
-5. **The `CreationTime` flag (4).** Upstream exposes no process start time, and
-   `isWindowsProcessStartTimeAvailable()` gates structured Claude and Codex
-   chat on it, so without this change win32 silently fell back to the legacy
-   transcript path. `GetProcessCreationTime` opens
+5. **The `CreationTime` flag (4).** Upstream exposes no process start time.
+   Structured Claude and Codex chat no longer depend on it; the owner probe and
+   the orcad runtime preflight still read it. `GetProcessCreationTime` opens
    `PROCESS_QUERY_LIMITED_INFORMATION` and converts `GetProcessTimes`' FILETIME
    to Unix ms; a process that denies the handle is emitted with the field
    absent, never zero, because callers must be able to tell "cannot identify"
@@ -381,9 +394,9 @@ on any other OS keeps using the scan.
    so itself.
 
    Two readers depend on it. `isWindowsProcessStartTimeAvailable()` returns
-   false unless this bit is set, because claiming otherwise leaves
-   `captureWindowsDescendantSnapshot` returning null forever while structured
-   chat believes it has a reaper. And `windows-process-tree-creation-time.cjs`
+   false unless this bit is set, so the owner probe never scans the whole table
+   for times it cannot get (the Windows Claude descendant snapshot that once
+   relied on it is gone). And `windows-process-tree-creation-time.cjs`
    asserts it during install, which is what forces a from-source rebuild —
    the same role `node-pty-job-ownership.cjs` plays for node-pty's job exports.
 
@@ -504,7 +517,7 @@ miss exactly the detached, reparented descendants the trackers exist to find
 ## Packaging
 
 The addon is Windows-only, so it follows the same contract as
-`windows-native-registry` (asserted by
+`@orca/windows-registry` (asserted by
 `config/scripts/package-electron-runtime-contract.test.mjs`):
 
 - an `optionalDependency`, so a macOS/Linux install tolerates its absence;
@@ -583,8 +596,8 @@ breakaway hands the whole tree its escape. The per-PTY job therefore omits
 `BREAKAWAY_OK` whenever `msys-2.0.dll` or `cygwin1.dll` sits on the shell's DLL
 search path — beside the executable, or under `usr/bin` for Git's `bin`
 launcher. Native shells keep explicit breakaway. Denying it costs Cygwin
-nothing, because it *pre-checks* the limit rather than retrying, so no spawn
-fails; but a *native* program that passes `CREATE_BREAKAWAY_FROM_JOB` itself
+nothing, because it _pre-checks_ the limit rather than retrying, so no spawn
+fails; but a _native_ program that passes `CREATE_BREAKAWAY_FROM_JOB` itself
 inside such a pane now gets `ERROR_ACCESS_DENIED`. `nohup` and `disown` are
 unaffected — they are Cygwin signal/session concepts, unrelated to job
 membership. The daemon's host job is unchanged.

@@ -88,14 +88,19 @@ export const runtimeEnvironmentsApi = {
     params?: unknown
     timeoutMs?: number
     expectedEnvironmentPairingRevision?: number
+    expectedEnvironmentRuntimeId?: string
   }): Promise<RuntimeRpcResponse<unknown>> => ipcRenderer.invoke('runtimeEnvironments:call', args),
+  cancelSubscription: (args: { subscriptionId: string }): Promise<void> =>
+    ipcRenderer.invoke('runtimeEnvironments:unsubscribe', args).then(() => undefined),
   subscribe: async (
     args: {
+      subscriptionId?: string
       selector: string
       method: string
       params?: unknown
       timeoutMs?: number
       expectedEnvironmentPairingRevision?: number
+      expectedEnvironmentRuntimeId?: string
     },
     callbacks: {
       onResponse: (response: RuntimeRpcResponse<unknown>) => void
